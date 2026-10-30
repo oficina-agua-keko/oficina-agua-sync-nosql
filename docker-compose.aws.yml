@@ -1,0 +1,54 @@
+# docker-compose.aws.yml — Feature 4 desplegada en una instancia EC2 de AWS.
+#
+#   docker compose -f docker-compose.aws.yml up -d --build
+#
+# Diferencias con docker-compose.yml (local):
+#   - Sin DynamoDB Local: el destino es Amazon DynamoDB real, con el rol de la instancia (sin claves).
+#     La tabla oficina_agua_resumen se crea antes en la consola de AWS (ver docs/despliegue-aws.md).
+#   - MySQL de origen sin puerto publicado: solo el sync-service lo alcanza, por la red interna.
+#   - Solo el puerto 8083 (Generate, GetJob y Swagger) queda expuesto, protegido con la API key.
+# Variables: archivo .env (ver .env.aws.example).
+
+name: sync-aws
+
+services:
+  mysql-origen:
+    image: mysql:8.4
+    environment:
+      MYSQL_ROOT_PASSWORD: ${ORIGEN_DB_ROOT_PASSWORD:?Definir ORIGEN_DB_ROOT_PASSWORD en el .env}
+      MYSQL_DATABASE: ${ORIGEN_DB_NAME:-oficina_agua}
+      ORIGEN_DB_USER: ${ORIGEN_DB_USER:-sync_ro}
+      ORIGEN_DB_PASSWORD: ${ORIGEN_DB_PASSWORD:?Definir ORIGEN_DB_PASSWORD en el .env}
+    volumes:
+      - ./db/origen:/docker-entrypoint-initdb.d:ro
+      - mysql-origen-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h localhost -uroot -p$${MYSQL_ROOT_PASSWORD}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  sync-service:
+    build: ./sync-service
+    depends_on:
+      mysql-origen:
+        condition: service_healthy
+    environment:
+      SYNC_PORT: 8083
+      SYNC_API_KEY: ${SYNC_API_KEY:?Definir SYNC_API_KEY en el .env}
+      ORIGEN_DB_HOST: mysql-origen
+      ORIGEN_DB_PORT: 3306
+      ORIGEN_DB_NAME: ${ORIGEN_DB_NAME:-oficina_agua}
+      ORIGEN_DB_USER: ${ORIGEN_DB_USER:-sync_ro}
+      ORIGEN_DB_PASSWORD: ${ORIGEN_DB_PASSWORD}
+      # Vacío a propósito: DynamoDB de AWS con el rol de la instancia (no DynamoDB Local).
+      DYNAMODB_ENDPOINT: ""
+      DYNAMODB_TABLE_RESUMEN: ${DYNAMODB_TABLE_RESUMEN:-oficina_agua_resumen}
+      AWS_REGION: ${AWS_REGION:-us-east-1}
+    ports:
+      - "8083:8083"
+    restart: unless-stopped
+
+volumes:
+  mysql-origen-data:
