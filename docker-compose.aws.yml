@@ -1,0 +1,55 @@
+# docker-compose.aws.yml — Feature 4 desplegada en AWS (EC2 + DynamoDB real)
+#
+# Diferencias con docker-compose.yml (entorno local):
+#   - NO levanta DynamoDB Local: el destino es Amazon DynamoDB, en AWS.
+#   - DYNAMODB_ENDPOINT va vacío: así el servicio usa DynamoDB de AWS con las credenciales
+#     del entorno (rol IAM de la instancia EC2). No se pasan claves de AWS.
+#   - Publica el servicio en el puerto 80 del servidor.
+#
+# Uso:  docker compose -f docker-compose.aws.yml up -d --build
+# Las variables se leen de .env (ver .env.example). El .env real nunca se sube.
+
+name: oficina-agua-sync-aws
+
+services:
+  mysql-origen:
+    image: mysql:8.4
+    container_name: sync-mysql-origen
+    environment:
+      MYSQL_ROOT_PASSWORD: ${ORIGEN_DB_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${ORIGEN_DB_NAME:-oficina_agua}
+      ORIGEN_DB_USER: ${ORIGEN_DB_USER:-sync_ro}
+      ORIGEN_DB_PASSWORD: ${ORIGEN_DB_PASSWORD}
+    volumes:
+      - ./db/origen:/docker-entrypoint-initdb.d:ro
+      - mysql-origen-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-p${ORIGEN_DB_ROOT_PASSWORD}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  sync-service:
+    build: ./sync-service
+    container_name: sync-service
+    depends_on:
+      mysql-origen:
+        condition: service_healthy
+    environment:
+      SYNC_PORT: 8083
+      SYNC_API_KEY: ${SYNC_API_KEY}
+      ORIGEN_DB_HOST: mysql-origen
+      ORIGEN_DB_PORT: 3306
+      ORIGEN_DB_NAME: ${ORIGEN_DB_NAME:-oficina_agua}
+      ORIGEN_DB_USER: ${ORIGEN_DB_USER:-sync_ro}
+      ORIGEN_DB_PASSWORD: ${ORIGEN_DB_PASSWORD}
+      DYNAMODB_ENDPOINT: ""
+      DYNAMODB_TABLE_RESUMEN: ${DYNAMODB_TABLE_RESUMEN:-oficina_agua_resumen}
+      AWS_REGION: ${AWS_REGION:-us-east-1}
+    ports:
+      - "80:8083"
+    restart: unless-stopped
+
+volumes:
+  mysql-origen-data:
