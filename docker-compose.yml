@@ -82,6 +82,8 @@ services:
     environment:
       SYNC_PORT: 8083
       SYNC_API_KEY: ${SYNC_API_KEY:-}
+      # CAMBIO: variable nueva (retardo de la replicación, en segundos).
+      SYNC_RETARDO_SEGUNDOS: ${SYNC_RETARDO_SEGUNDOS:-30}
       ORIGEN_DB_HOST: mysql-origen
       ORIGEN_DB_PORT: 3306
       ORIGEN_DB_NAME: ${ORIGEN_DB_NAME:-oficina_agua}
