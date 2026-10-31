@@ -58,3 +58,6 @@ ehthumbs.db
 Desktop.ini
 $RECYCLE.BIN/
 *~
+
+.env.aws
+!.env.aws.example

@@ -239,6 +239,12 @@ correo ni documentos):
    por lote. **No existe ninguna operación de borrado**: un registro que desapareció del origen se
    queda en el destino.
 
+**Retardo configurable.** Para que se vea que el trabajo es asíncrono, el Thread hace la replicación
+en dos fases: primero **consulta y registra en el log cuánto falta por replicar** (por ejemplo
+`Pendiente por replicar: 61 registros (61 nuevos y 0 modificados)`), después **espera 30 segundos**
+(`SYNC_RETARDO_SEGUNDOS`, 30 por defecto; con `0` no espera) y recién entonces escribe en DynamoDB.
+Mientras espera, la API ya respondió `202` y el job sigue `EN_PROGRESO`.
+
 Estados del job: `PENDIENTE` → `EN_PROGRESO` → `COMPLETADO` o `FALLIDO`. Si falla, el job queda
 `FALLIDO` con un motivo legible y sin detalles internos (por ejemplo, *No se pudo consultar el
 destino en DynamoDB.*); el fallo no tumba al Thread ni afecta al origen, y la siguiente ejecución se
@@ -328,9 +334,21 @@ curl -i -X POST http://localhost:8083/api/sync/resumen -H "X-API-Key: cambiar_es
 curl -s http://localhost:8083/api/sync/jobs/<jobId> -H "X-API-Key: cambiar_esta_api_key"
 ```
 
-**Esperado:** `"estado": "COMPLETADO"` con `finalizadoEn` y los conteos: 61 insertados en total
-(25 clientes, 32 consumos, 4 pagos), 0 actualizados, 0 sin cambios. Si se consulta muy rápido puede
-verse antes `EN_PROGRESO`.
+**Esperado:** durante los primeros ~30 segundos el job está en `"estado": "EN_PROGRESO"` (con
+`iniciadoEn`): es el retardo que demuestra que la API respondió sin esperar. Pasado ese tiempo,
+vuelve a consultar y verás `"estado": "COMPLETADO"` con `finalizadoEn` y los conteos: 61 insertados
+en total (25 clientes, 32 consumos, 4 pagos), 0 actualizados, 0 sin cambios.
+
+Para ver el log de lo que falta por replicar (antes de escribir):
+
+```bash
+docker compose logs -f sync-service
+```
+
+Debe mostrar, en este orden: `CLIENTE: faltan por replicar 25 nuevos y 0 modificados…`, luego
+`Pendiente por replicar: 61 registros (61 nuevos y 0 modificados); 0 ya están al día`, luego
+`Esperando 30 segundos antes de replicar…`, y al final `CLIENTE: 25 insertados…` y el job
+`COMPLETADO`.
 
 **5. Comprobar que quedó en DynamoDB** (con la AWS CLI; las credenciales pueden ser `local`):
 
@@ -355,13 +373,15 @@ docker exec -it sync-mysql-origen mysql -usync_ro -p oficina_agua -e "INSERT INT
 
 (la contraseña es `ORIGEN_DB_PASSWORD` de tu `.env`). **Esperado:** `INSERT command denied`.
 
+> El retardo se cambia con `SYNC_RETARDO_SEGUNDOS` en el `.env` (por ejemplo `0` para replicar sin esperar).
+
 **Pruebas automatizadas**
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\pruebas\integracion.ps1
 ```
 
-Levanta la feature desde cero (**borra los datos locales**) y comprueba de punta a punta 20 casos:
+Levanta la feature desde cero (**borra los datos locales**; conviene poner `SYNC_RETARDO_SEGUNDOS=0` en el `.env` para que no espere 30 s en cada replicación) y comprueba de punta a punta 20 casos:
 destino vacío, repetición sin cambios, cambios parciales, que nunca borra, fallo del destino
 (DynamoDB caído) con recuperación y que no se replican datos sensibles. Guarda el reporte en
 [`docs/evidencias/`](docs/evidencias). Las pruebas unitarias del servicio se corren con JDK 21 y
